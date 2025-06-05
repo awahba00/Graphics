@@ -19,9 +19,9 @@ void menu(HWND hwnd);
 // Represents a drawn shape and its properties
 struct Shape {
     std::string type;   // Shape type ("DDALine", "CirclePolar", etc.)
-    int x1, y1;         // Primary coordinates (e.g., starting point)
-    int x2, y2;         // Secondary coordinates (e.g., ending point) or unused
-    int a, b;           // Additional parameters (e.g., radius, ellipse axes)
+    int x1, y1;         // Primary coordinates (e.g., starting point or top-left for Hermite)
+    int x2, y2;         // Secondary coordinates or unused
+    int a, b;           // Additional parameters (e.g., radius, ellipse axes, or size for Hermite)
     COLORREF color;     // Drawing color
 };
 
@@ -29,8 +29,8 @@ struct Shape {
 static std::vector<Shape> shapes;
 
 // Coordinates and parameters used during mouse events
-static int xc, yc;                // First click (center or start)
-static int xe, ye;                // Second click (radius or end)
+static int xc, yc;                // First click (center/start or top-left for Hermite)
+static int xe, ye;                // Second click (radius/end or bottom-right for Hermite)
 static int xe2, ye2;              // Third click (for polar ellipse)
 static int R, R2;                 // Radii or auxiliary parameters
 static int windowX, windowY, windowR;  // Clipping window center and radius
@@ -62,6 +62,64 @@ double cubicBezier(double w, double x, double y, double z, double t)
     double d = LERP(a, b, t);
     double e = LERP(b, c, t);
     return LERP(d, e, t);
+}
+
+//-------------------------------------------------------------------------------------------------
+// Hermite Curve Functions
+//-------------------------------------------------------------------------------------------------
+
+// Evaluates a point on a Hermite curve at parameter t, given endpoints p0,p1 and tangents r0,r1
+POINT EvaluateHermite(float t, POINT p0, POINT p1, POINT r0, POINT r1) {
+    float h1 = 2 * t * t * t - 3 * t * t + 1;
+    float h2 = -2 * t * t * t + 3 * t * t;
+    float h3 = t * t * t - 2 * t * t + t;
+    float h4 = t * t * t - t * t;
+
+    POINT p;
+    p.x = round(h1 * p0.x + h2 * p1.x + h3 * r0.x + h4 * r1.x);
+    p.y = round(h1 * p0.y + h2 * p1.y + h3 * r0.y + h4 * r1.y);
+    return p;
+}
+
+// Draws a "Hermite square" by sampling many vertical Hermite curves across the square
+void FillHermiteSquare(HDC hdc, POINT topLeft, int size, COLORREF color) {
+    HPEN hPen = CreatePen(PS_SOLID, 1, color);
+    HGDIOBJ oldPen = SelectObject(hdc, hPen);
+
+    int count = 50;  // number of vertical strips
+
+    for (int i = 0; i <= count; i++) {
+        float t = (float)i / count;
+        int x = topLeft.x + (int)(t * size);
+
+        // Define Hermite endpoints p0,p1 for this vertical strip
+        POINT p0 = { x, topLeft.y };
+        POINT p1 = { x, topLeft.y + size };
+
+        // Define tangents that vary with t
+        POINT r0 = { (int)(50 * sin(t * 3.1415f)), 100 };
+        POINT r1 = { (int)(-50 * sin(t * 3.1415f)), -100 };
+
+        const int steps = 100;
+        POINT prev = EvaluateHermite(0.0f, p0, p1, r0, r1);
+        for (int j = 1; j <= steps; j++) {
+            float tj = (float)j / steps;
+            POINT curr = EvaluateHermite(tj, p0, p1, r0, r1);
+            MoveToEx(hdc, prev.x, prev.y, NULL);
+            LineTo(hdc, curr.x, curr.y);
+            prev = curr;
+        }
+    }
+
+    // Draw the square border
+    MoveToEx(hdc, topLeft.x, topLeft.y, NULL);
+    LineTo(hdc, topLeft.x + size, topLeft.y);
+    LineTo(hdc, topLeft.x + size, topLeft.y + size);
+    LineTo(hdc, topLeft.x, topLeft.y + size);
+    LineTo(hdc, topLeft.x, topLeft.y); // close the square
+
+    SelectObject(hdc, oldPen);
+    DeleteObject(hPen);
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -586,6 +644,7 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
             case 51: cout << "Mode: Define Clipping Window" << endl; break;
             case 52: cout << "Mode: Clip Line in Window" << endl; break;
             case 53: cout << "Mode: Clip Point in Window" << endl; break;
+            case 60: cout << "Mode: Draw Hermite Square" << endl; break;
             default: break;
             }
         }
@@ -605,6 +664,11 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
         else if (currentShape == 53) {
             pointClip(hdc, xc, yc, windowR, windowX, windowY, currentColor);
             cout << "Action: Clip point at (" << xc << ", " << yc << ")" << endl;
+        }
+        // If Hermite Square mode is selected (ID = 60), record top-left
+        else if (currentShape == 60) {
+            // First click defines top-left corner of Hermite square
+            cout << "Action: Set Hermite square top-left (" << xc << ", " << yc << ")" << endl;
         }
         break;
 
@@ -693,6 +757,17 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
             cout << "Clipped line from (" << xc << "," << yc << ") to (" << xe << "," << ye << ") within window" << endl;
         }
 
+        // If Hermite Square mode is selected (ID = 60), second click defines bottom-right
+        else if (currentShape == 60) {
+            POINT topLeft = { xc, yc };
+            int dx = abs(xe - xc);
+            int dy = abs(ye - yc);
+            int size = min(dx, dy); // ensure a square: side = min(dx,dy)
+            FillHermiteSquare(hdc, topLeft, size, currentColor);
+            shapes.push_back({ "HermiteSquare", topLeft.x, topLeft.y, 0, 0, size, 0, currentColor });
+            cout << "Drawn: Hermite Square top-left (" << xc << "," << yc << "), size " << size << endl;
+        }
+
         break;
 
     case WM_RBUTTONUP:
@@ -743,6 +818,10 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
             }
             else if (s.type == "EllipsePolar") {
                 ellipsePolar(hdcPaint, s.x1, s.y1, s.a, s.b, s.color);
+            }
+            else if (s.type == "HermiteSquare") {
+                POINT topLeft = { s.x1, s.y1 };
+                FillHermiteSquare(hdcPaint, topLeft, s.a, s.color);
             }
         }
 
@@ -859,6 +938,11 @@ void menu(HWND hwnd)
     AppendMenu(hMenu, MF_POPUP, (UINT_PTR)hEllipseMenu, "Ellipse");
     AppendMenu(hEllipseMenu, MF_STRING, 19, "Direct");
     AppendMenu(hEllipseMenu, MF_STRING, 20, "Polar");
+
+    // Curve Menu: Hermite Square
+    HMENU hCurveMenu = CreateMenu();
+    AppendMenu(hMenu, MF_POPUP, (UINT_PTR)hCurveMenu, "Curve");
+    AppendMenu(hCurveMenu, MF_STRING, 60, "Hermite Square");
 
     // Color Menu: choose drawing color
     HMENU hColorMenu = CreateMenu();
