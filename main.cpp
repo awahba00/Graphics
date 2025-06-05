@@ -9,8 +9,31 @@
 #include <iostream>
 #include <math.h>
 #include <fstream>
+#include <vector>
+#include <string>
 
 using namespace std;
+
+struct Shape {
+    std::string type;
+    int x1, y1, x2, y2, x3, y3;
+    COLORREF color;
+};
+std::vector<Shape> shapes;
+
+void SaveShapesToFile(const std::string& filename) {
+    std::ofstream out(filename);
+    for (const auto& s : shapes) {
+        out << s.type << ' ' << s.x1 << ' ' << s.y1 << ' '
+            << s.x2 << ' ' << s.y2 << ' '
+            << s.x3 << ' ' << s.y3 << ' '
+            << GetRValue(s.color) << ' '
+            << GetGValue(s.color) << ' '
+            << GetBValue(s.color) << '\n';
+    }
+}
+
+
 
 double LERP(double earlier, double later, double t)
 {
@@ -242,6 +265,8 @@ void DDALine(HDC hdc, int x1, int y1, int x2, int y2, COLORREF color) {
                 Y += Yinc;           // increment in y at each step
 
         }
+        shapes.push_back({"DDALine", x1, y1, x2, y2, 0, 0, color});
+
 }
 
 
@@ -313,6 +338,8 @@ void circleDirectMethod(HDC hdc, int xc, int yc, int R, COLORREF color)
                 y = sqrt((double)(R2 - x * x));
 
         }
+        shapes.push_back({"CircleDirect", xc, yc, R, 0, 0, 0, color});
+
 }
 
 
@@ -465,7 +492,7 @@ void EllipsePolar(HDC hdc, int xc, int yc, int R1, int R2, COLORREF color)
 //In midpoint line drawing algorithms, for example, error = dx(y-y0) - dy(x-x0)
 //I already explained that earlier, though.
 //What would the Bresenham algorithm of an ellipse be, then?
-//Error   = (x^2)(b^2)+(y^2)(a^2)�(a^2)(b^2)
+//Error   = (x^2)(b^2)+(y^2)(a^2)–(a^2)(b^2)
 //There is an easy way and a hard way.
 //Easy way is to divide it to two parts depending on slope and implement a midpoint algorithm.
 //Hard way is probably not what you want us to do...
@@ -488,13 +515,13 @@ void EllipseBresenham(HDC hdc, int xc, int yc, int a, int b, COLORREF color)
         int x = -a, y = 0;
         //Region 0: abs(slope) is huge, b*b*x >= a*a*y, x increases only sometimes, y increases always.
         //next midpoint is x+0.5,y+1
-        //initial error is (0.5^2)(b^2)+(1^2)(a^2)�(a^2)(b^2)
+        //initial error is (0.5^2)(b^2)+(1^2)(a^2)–(a^2)(b^2)
         //We multiply all error calculations by 4 to avoid floating point operations.
         //initial error is now (b^2)+4(a^2)-4(a^2)(b^2)
         errorMid = (b * b) + (4 * a * a) - (4 * a * a * b * b);
         //change in midpoint error on x++ = error(x+1.5,y+1)-error(x+0.5,y+1)
         //Of course multiply with 4.
-        //4((x+1.5)^2)(b^2)+4((y+1)^2)(a^2)�4(a^2)(b^2)-(4((x+0.5)^2)(b^2)+4((y+1)^2)(a^2)�4(a^2)(b^2))
+        //4((x+1.5)^2)(b^2)+4((y+1)^2)(a^2)–4(a^2)(b^2)-(4((x+0.5)^2)(b^2)+4((y+1)^2)(a^2)–4(a^2)(b^2))
         //=4((x+1.5)^2)(b^2)-(4((x+0.5)^2)(b^2))
         //=(8x+8)(b*b)
         while (abs(b*b*x)>=abs(a*a*y))
@@ -660,6 +687,22 @@ int xe2, ye2;
 int R, R2;
 int windowX, windowY, windowR;
 
+void LoadShapesFromFile(HDC hdc, const std::string& filename) {
+    std::ifstream in(filename);
+    Shape s;
+    int r, g, b;
+    shapes.clear();
+    while (in >> s.type >> s.x1 >> s.y1 >> s.x2 >> s.y2 >> s.x3 >> s.y3 >> r >> g >> b) {
+        s.color = RGB(r, g, b);
+        shapes.push_back(s);
+
+        if (s.type == "DDALine")
+            DDALine(hdc, s.x1, s.y1, s.x2, s.y2, s.color);
+        else if (s.type == "CircleDirect")
+            circleDirectMethod(hdc, s.x1, s.y1, s.x2, s.color); // x2 = R هنا
+
+    }
+}
 
 
 LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -703,25 +746,13 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wParam, LPARAM 
                 }
 
                 else if (wParam == 1) {
-
-                        RECT rect;
-                        if (GetWindowRect(hwnd, &rect)) {
-
-                                rect.top += 8;
-                                rect.left += 8;
-                                HDCToFile("picture.bmp", hdc, rect, 24);
-                                ReleaseDC(hwnd, hdc);
-
-
-                        }
+                    SaveShapesToFile("shapes.txt");
                 }
-
                 else if (wParam == 2) {
-
-                        load(hwnd, hdc);
-
+                    InvalidateRect(hwnd, NULL, TRUE); // امسح الشاشة
+                    LoadShapesFromFile(hdc, "shapes.txt");
                 }
-                else if (wParam == 3) {
+                                else if (wParam == 3) {
 
                         InvalidateRect(hwnd, NULL, TRUE);
                 }
